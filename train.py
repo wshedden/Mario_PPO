@@ -11,6 +11,11 @@ from stable_baselines3.common.atari_wrappers import MaxAndSkipEnv
 import gym_super_mario_bros
 import argparse
 import torch
+import signal
+
+# define a global variable for the model
+global_model = None
+
 class SaveOnBestTrainingRewardCallback(BaseCallback):
     """
     Callback for saving a model (the check is done every ``check_freq`` steps)
@@ -55,6 +60,14 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
 
         return True
 
+def signal_handler(sig, frame):
+    print("Stopping...")
+    if global_model is not None:
+        name = input("Enter a name for the model: ")
+        global_model.save("ppo_smb_" + name)
+    exit(0)
+
+
 def make_env(env_id, rank, seed=0, skip=1):
     def _init():
         env = gym_super_mario_bros.make(env_id)
@@ -64,16 +77,18 @@ def make_env(env_id, rank, seed=0, skip=1):
     set_random_seed(seed)
     return _init
 
-def train_model(model, env, log_dir, learning_rate):
+def train_model(model, log_dir, learning_rate):
     # this function trains the model using the given environment and log directory
     print("Training...")
     callback = SaveOnBestTrainingRewardCallback(check_freq=1000, log_dir=log_dir)
-    model.learn(total_timesteps=10000000, callback=callback, tb_log_name="ppo_super_mario_bros_tensorboard")
+    log_name = "ppo_smb_lr_" + str(learning_rate)
+    model.learn(total_timesteps=10000000, callback=callback, tb_log_name=log_name)
     model.save("ppo_super_mario_bros")
     print("Done!")
 
 if __name__ == "__main__":
     log_dir = "tmp/"
+    signal.signal(signal.SIGINT, signal_handler)
 
     os.makedirs(log_dir, exist_ok=True)
 
@@ -81,15 +96,10 @@ if __name__ == "__main__":
 
     # create an argument parser object
     parser = argparse.ArgumentParser(description="Train a PPO model on Super Mario Bros.")
-    # add an argument for the model name
     parser.add_argument("model", type=str, help="the name of the model to use or 'new' for a default model")
-    # add an argument for the number of CPUs
     parser.add_argument("-n", "--num_cpu", type=int, default=2, help="the number of CPUs to use (default: 2)")
-    # add an argument for the skip parameter
-    parser.add_argument("-s", "--skip", type=int, default=1, help="the number of frames to skip (default: 1)")
-    # add an argument for the learning rate
+    parser.add_argument("-s", "--skip", type=int, default=2, help="the number of frames to skip (default: 2)")
     parser.add_argument("-l", "--learning_rate", type=float, default=0.000025, help="the learning rate for the model (default: 0.000025)")
-    # parse the command line arguments
     args = parser.parse_args()
 
     # print the hyperparameters
@@ -113,7 +123,7 @@ if __name__ == "__main__":
     if os.path.isfile(args.model):
         # load the model from the file
         env = VecMonitor(SubprocVecEnv([make_env(env_id, i, skip=args.skip) for i in range(args.num_cpu)]), 'tmp/monitor')
-        model = PPO.load(args.model, device=device, env=env, tensorboard_log="./ppo_super_mario_bros_tensorboard/")
+        model = PPO.load(args.model, env=env, device=device)
         print("Model loaded from file.")
 
     elif args.model == "new":
@@ -125,5 +135,6 @@ if __name__ == "__main__":
         # raise an error if the model name is invalid
         raise ValueError(f"Invalid model name: {args.model}")
 
-    # call the train_model function with the model, env and log_dir
-    train_model(model, env, log_dir, args.learning_rate)
+    global_model = model
+
+    train_model(model, log_dir, args.learning_rate)
