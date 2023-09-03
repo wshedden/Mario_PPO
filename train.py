@@ -13,9 +13,6 @@ import argparse
 import torch
 import signal
 
-# define a global variable for the model
-global_model = None
-
 class SaveOnBestTrainingRewardCallback(BaseCallback):
     """
     Callback for saving a model (the check is done every ``check_freq`` steps)
@@ -60,14 +57,6 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
 
         return True
 
-def signal_handler(sig, frame):
-    print("Stopping...")
-    if global_model is not None:
-        name = input("Enter a name for the model: ")
-        global_model.save("ppo_smb_" + name)
-    exit(0)
-
-
 def make_env(env_id, rank, seed=0, skip=1):
     def _init():
         env = gym_super_mario_bros.make(env_id)
@@ -86,55 +75,61 @@ def train_model(model, log_dir, learning_rate):
     model.save("ppo_super_mario_bros")
     print("Done!")
 
-if __name__ == "__main__":
-    log_dir = "tmp/"
-    signal.signal(signal.SIGINT, signal_handler)
-
-    os.makedirs(log_dir, exist_ok=True)
-
-    env_id = "SuperMarioBros-1-1-v0"
-
-    # create an argument parser object
-    parser = argparse.ArgumentParser(description="Train a PPO model on Super Mario Bros.")
-    parser.add_argument("model", type=str, help="the name of the model to use or 'new' for a default model")
-    parser.add_argument("-n", "--num_cpu", type=int, default=2, help="the number of CPUs to use (default: 2)")
-    parser.add_argument("-s", "--skip", type=int, default=2, help="the number of frames to skip (default: 2)")
-    parser.add_argument("-l", "--learning_rate", type=float, default=0.000025, help="the learning rate for the model (default: 0.000025)")
-    args = parser.parse_args()
-
-    # print the hyperparameters
-    print(f"Hyperparameters:")
-    print(f"Number of CPUs: {args.num_cpu}")
-    print(f"Skip: {args.skip}")
-    print(f"Learning rate: {args.learning_rate}")
-
+def get_device():
+    # this function returns the device to use for the model
     # check if CUDA is available and print some information
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"CUDA is available on device {torch.cuda.current_device()}")
         print(f"Device name: {torch.cuda.get_device_name(0)}")
         print(f"Device memory: {torch.cuda.get_device_properties(0).total_memory / (1024 ** 3):.2f} GB")
-        print(torch.cuda.memory_summary(device=None, abbreviated=False))
     else:
         device = torch.device("cpu")
         print("CUDA is not available. Using CPU instead.")
+    return device
+
+def parse_args():
+    # this function parses the command-line arguments and returns the arguments object
+    # create an argument parser object
+    parser = argparse.ArgumentParser(description="Train a PPO model on Super Mario Bros.")
+    parser.add_argument("model", type=str, help="the name of the model to use or 'new' for a default model")
+    parser.add_argument("-n", "--num_cpu", type=int, default=2, help="the number of CPUs to use (default: 2)")
+    parser.add_argument("-s", "--skip", type=int, default=2, help="the number of frames to skip (default: 2)")
+    parser.add_argument("-l", "--learning_rate", type=float, default=0.000025, help="the learning rate for the model (default: 0.000025)")
+    parser.add_argument("-d", "--log_dir", type=str, default="tmp/", help="the log directory for the model (default: tmp/)")
+    parser.add_argument("-e", "--env_id", type=str, default="SuperMarioBros-1-1-v0", help="the environment id for the game (default: SuperMarioBros-1-1-v0)")
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    
+    # parse the command-line arguments
+    args = parse_args()
+
+    # print the hyperparameters
+    print(f"Hyperparameters:")
+    print(f"Number of CPUs: {args.num_cpu}")
+    print(f"Skip: {args.skip}")
+    print(f"Learning rate: {args.learning_rate}")
+    print(f"Log directory: {args.log_dir}")
+    print(f"Environment id: {args.env_id}")
+
+    # get the device to use for the model
+    device = get_device()
 
     # load the model from the file or create a new one
     if os.path.isfile(args.model):
         # load the model from the file
-        env = VecMonitor(SubprocVecEnv([make_env(env_id, i, skip=args.skip) for i in range(args.num_cpu)]), 'tmp/monitor')
+        env = VecMonitor(SubprocVecEnv([make_env(args.env_id, i, skip=args.skip) for i in range(args.num_cpu)]), args.log_dir + 'monitor')
         model = PPO.load(args.model, env=env, device=device)
         print("Model loaded from file.")
 
     elif args.model == "new":
         # create a default model with some parameters
-        env = VecMonitor(SubprocVecEnv([make_env(env_id, i, skip=args.skip) for i in range(args.num_cpu)]), 'tmp/monitor')
+        env = VecMonitor(SubprocVecEnv([make_env(args.env_id, i, skip=args.skip) for i in range(args.num_cpu)]), args.log_dir + 'monitor')
         model = PPO("CnnPolicy", env, verbose=1, tensorboard_log="./ppo_super_mario_bros_tensorboard/", learning_rate=args.learning_rate, device=device)
         print("New model created.")
     else:
         # raise an error if the model name is invalid
         raise ValueError(f"Invalid model name: {args.model}")
 
-    global_model = model
-
-    train_model(model, log_dir, args.learning_rate)
+    train_model(model, args.log_dir, args.learning_rate)
